@@ -75,6 +75,57 @@ class LedgerStructureTests(LedgerTestCase):
         self.assertTrue(ok, message)
         self.assertIn("not authenticated", message)
 
+    def test_keyless_append_cannot_downgrade_authenticated_ledger(self) -> None:
+        self.ledger.append("human.a", "approve", {"case": 1})
+        with self.assertRaisesRegex(LedgerIntegrityError, "authentication mode|writer key"):
+            Ledger(self.path).append("human.b", "approve", {"case": 2})
+        self.assertEqual(len(self.ledger.read_all()), 1)
+        ok, message = self.ledger.verify(require_auth=True)
+        self.assertTrue(ok, message)
+
+    def test_public_verifier_rejects_authentication_downgrade(self) -> None:
+        records = self.append_records(1)
+        salt = "ab" * 16
+        body = {
+            "schema": records[0]["schema"],
+            "ledger_id": records[0]["ledger_id"],
+            "seq": 2,
+            "ts": records[0]["ts"],
+            "actor": "human.b",
+            "event": "approve",
+            "payload_commitment": payload_commitment({"case": 2}, salt),
+            "payload_salt": salt,
+            "prev_hash": records[0]["record_hash"],
+            "writer_key_id": None,
+        }
+        records.append({**body, "record_hash": record_digest(body)})
+        self.write_records(records)
+        ok, message = Ledger(self.path).verify()
+        self.assertFalse(ok)
+        self.assertIn("authentication mode changed", message)
+
+    def test_non_string_hex_field_is_rejected(self) -> None:
+        records = self.append_records(1)
+        records[0]["payload_salt"] = 11111111111111111111111111111111
+        body = {
+            key: value
+            for key, value in records[0].items()
+            if key not in {"record_hash", "writer_mac"}
+        }
+        records[0]["record_hash"] = record_digest(body)
+        self.write_records(records)
+        ok, message = Ledger(self.path).verify()
+        self.assertFalse(ok)
+        self.assertIn("invalid payload_salt", message)
+
+    def test_non_nfc_record_returns_format_failure(self) -> None:
+        records = self.append_records(1)
+        records[0]["actor"] = "e\u0301"
+        self.write_records(records)
+        ok, message = Ledger(self.path).verify()
+        self.assertFalse(ok)
+        self.assertIn("canonical record invalid", message)
+
     def test_invalid_sequence_fails(self) -> None:
         records = self.append_records()
         records[1]["seq"] = 99
@@ -213,6 +264,11 @@ class CheckpointTests(LedgerTestCase):
         with self.assertRaises(LedgerIntegrityError):
             self.ledger.checkpoint(require_auth=True)
 
+    def test_keyless_checkpoint_cannot_downgrade_authenticated_ledger(self) -> None:
+        self.append_records(2)
+        with self.assertRaisesRegex(LedgerIntegrityError, "authentication mode|writer key"):
+            Ledger(self.path).checkpoint()
+
     def test_tail_truncation_needs_retained_checkpoint_to_detect(self) -> None:
         records = self.append_records(4)
         receipt = self.ledger.checkpoint(require_auth=True)
@@ -285,6 +341,17 @@ class MerkleTests(unittest.TestCase):
         proof = inclusion_proof(leaves, 4)
         proof["tree_size"] = 4
         self.assertFalse(verify_inclusion(leaves[4], proof, merkle_root(leaves)))
+
+    def test_boolean_index_and_tree_size_fail(self) -> None:
+        leaves = self.leaves(1)
+        with self.assertRaises(TypeError):
+            inclusion_proof(leaves, True)
+        proof = inclusion_proof(leaves, 0)
+        proof["leaf_index"] = False
+        self.assertFalse(verify_inclusion(leaves[0], proof, merkle_root(leaves)))
+        proof = inclusion_proof(leaves, 0)
+        proof["tree_size"] = True
+        self.assertFalse(verify_inclusion(leaves[0], proof, merkle_root(leaves)))
 
     def test_wrong_schema_fails(self) -> None:
         leaves = self.leaves(2)

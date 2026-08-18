@@ -9,9 +9,9 @@ decides, and the system records a commitment to the decision payload.
 > **Boundary:** this is a non-production proof of concept. It does not make a
 > local file immutable, submit anything to a blockchain, authenticate the human
 > named in an `actor` string, establish trusted time, or prove that a decision
-> was correct. Modification or truncation becomes reliably detectable only
-> when the verifier has the writer key or a checkpoint retained outside the
-> attacker's control.
+> was correct. Modification or full-chain rewriting is detectable with an
+> uncompromised writer key or a retained checkpoint. Tail truncation requires
+> a checkpoint or equivalent state retained outside the attacker's control.
 
 ## Run it in 90 seconds
 
@@ -33,7 +33,7 @@ The demo shows six things:
 5. a retained checkpoint detecting otherwise invisible tail truncation; and
 6. an index- and tree-size-aware Merkle inclusion proof.
 
-The test suite contains 33 unit and adversarial tests and uses only the Python
+The test suite contains 39 unit and adversarial tests and uses only the Python
 standard library.
 
 ## The three distinctions that matter
@@ -135,7 +135,7 @@ or endorsed by G42, the European Union, or any organisation cited above.
 ledger.py          strict records, HMAC authentication, checkpoints
 merkle.py          Merkle roots and index/size-aware inclusion proofs
 demo.py            synthetic decision workflow and attack demonstrations
-test_ledger.py     33 unit and adversarial tests
+test_ledger.py     39 unit and adversarial tests
 PROTOCOL.md        record, receipt, and proof formats
 THREAT_MODEL.md    claims, attacker model, and explicit exclusions
 SECURITY.md        vulnerability reporting and support boundary

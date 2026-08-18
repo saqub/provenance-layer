@@ -1,0 +1,8 @@
+include CHANGELOG.md
+include CONTRIBUTING.md
+include LICENSE
+include PROTOCOL.md
+include README.md
+include SECURITY.md
+include THREAT_MODEL.md
+include test_ledger.py

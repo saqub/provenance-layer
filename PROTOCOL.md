@@ -1,4 +1,4 @@
-# Protocol notes - v0.3.0 PoC
+# Protocol notes - v0.3.1 PoC
 
 This document makes the byte-level commitments in the Python implementation
 reviewable. It is a PoC profile, not a proposed standard.
@@ -81,6 +81,11 @@ The body committed by `record_hash` contains exactly:
 `record_hash` and optional `writer_mac` are then added. Unknown fields, missing
 fields, mixed ledger identities, invalid sequence numbers, and invalid digests
 fail verification.
+
+Authentication mode and `writer_key_id` are fixed by the first record for the
+ledger lifetime. This PoC rejects unauthenticated-to-authenticated upgrades,
+authenticated-to-unauthenticated downgrades, and key changes; key rotation is
+outside the implemented protocol.
 
 `actor` is a label. This PoC does not bind it to a person or credential.
 

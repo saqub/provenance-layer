@@ -8,11 +8,13 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import tempfile
 
 from ledger import Ledger, record_digest
 from merkle import inclusion_proof, verify_inclusion
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+_DEMO_DIR = tempfile.TemporaryDirectory(prefix="provenance-demo-")
+ROOT = _DEMO_DIR.name
 LEDGER_PATH = os.path.join(ROOT, "demo-ledger.jsonl")
 CHECKPOINT_PATH = os.path.join(ROOT, "demo-checkpoint.json")
 
@@ -45,7 +47,7 @@ def rewrite_hash_chain(records: list[dict], start_index: int) -> None:
         records[index]["record_hash"] = record_digest(body)
 
 
-def main() -> None:
+def _run_demo() -> None:
     for path in (LEDGER_PATH, CHECKPOINT_PATH):
         if os.path.exists(path):
             os.remove(path)
@@ -149,6 +151,13 @@ def main() -> None:
     assert included
 
     banner("Boundary: integrity is not truth; anchorable is not anchored; PoC is not production")
+
+
+def main() -> None:
+    try:
+        _run_demo()
+    finally:
+        _DEMO_DIR.cleanup()
 
 
 if __name__ == "__main__":

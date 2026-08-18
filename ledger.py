@@ -33,6 +33,7 @@ CHECKPOINT_SCHEMA = "provenance-layer/checkpoint/v2"
 
 _HEX_32 = re.compile(r"^[0-9a-f]{32}$")
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
+_HEX_16 = re.compile(r"^[0-9a-f]{16}$")
 _RECORD_DOMAIN = b"provenance-layer/record/v2\x00"
 _PAYLOAD_DOMAIN = b"provenance-layer/payload/v1\x00"
 _CHECKPOINT_DOMAIN = b"provenance-layer/checkpoint/v2\x00"
@@ -62,6 +63,10 @@ def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, An
 
 def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _is_hex(value: Any, pattern: re.Pattern[str]) -> bool:
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
 
 
 def _validate_json_value(value: Any, path: str = "$") -> None:
@@ -118,7 +123,7 @@ def payload_hash(payload: Any) -> str:
 def payload_commitment(payload: Any, salt: str) -> str:
     """Commit to a payload with a per-record public salt."""
 
-    if not _HEX_32.fullmatch(salt):
+    if not _is_hex(salt, _HEX_32):
         raise ValueError("salt must be 16 bytes encoded as 32 lowercase hex characters")
     return _sha256_hex(_PAYLOAD_DOMAIN + bytes.fromhex(salt) + _canonical(payload))
 
@@ -126,7 +131,7 @@ def payload_commitment(payload: Any, salt: str) -> str:
 def commitment_matches(payload: Any, salt: str, expected: str) -> bool:
     """Verify a disclosed payload against its stored commitment."""
 
-    if not _HEX_64.fullmatch(expected):
+    if not _is_hex(salt, _HEX_32) or not _is_hex(expected, _HEX_64):
         return False
     return hmac.compare_digest(payload_commitment(payload, salt), expected)
 
@@ -272,6 +277,15 @@ class Ledger:
                 raise LedgerIntegrityError(f"refusing append: {message}")
 
             if records:
+                existing_key_id = records[0]["writer_key_id"]
+                supplied_key_id = key_id(self.writer_key) if self.writer_key else None
+                if supplied_key_id != existing_key_id:
+                    raise LedgerIntegrityError(
+                        "refusing append: authentication mode or writer key differs "
+                        "from the existing ledger"
+                    )
+
+            if records:
                 ledger_id = records[0]["ledger_id"]
                 previous = records[-1]["record_hash"]
             else:
@@ -311,6 +325,8 @@ class Ledger:
     ) -> tuple[bool, str]:
         previous = GENESIS
         expected_ledger_id: str | None = None
+        expected_writer_key_id: str | None = None
+        writer_mode_set = False
         authenticated = 0
         macs_not_checked = 0
 
@@ -346,17 +362,19 @@ class Ledger:
                 return False, f"format error at {label}: actor is empty"
             if not isinstance(record["event"], str) or not record["event"].strip():
                 return False, f"format error at {label}: event is empty"
-            if not _HEX_32.fullmatch(str(record["payload_salt"])):
+            if not _is_hex(record["payload_salt"], _HEX_32):
                 return False, f"format error at {label}: invalid payload_salt"
-            if not _HEX_64.fullmatch(str(record["payload_commitment"])):
+            if not _is_hex(record["payload_commitment"], _HEX_64):
                 return False, f"format error at {label}: invalid payload_commitment"
-            if not _HEX_64.fullmatch(str(record["prev_hash"])):
+            if not _is_hex(record["prev_hash"], _HEX_64):
                 return False, f"format error at {label}: invalid prev_hash"
-            if not _HEX_64.fullmatch(str(record["record_hash"])):
+            if not _is_hex(record["record_hash"], _HEX_64):
                 return False, f"format error at {label}: invalid record_hash"
 
+            if not isinstance(record["ledger_id"], str):
+                return False, f"format error at {label}: invalid ledger_id"
             try:
-                parsed_ledger_id = str(uuid.UUID(str(record["ledger_id"])))
+                parsed_ledger_id = str(uuid.UUID(record["ledger_id"]))
             except ValueError:
                 return False, f"format error at {label}: invalid ledger_id"
             if expected_ledger_id is None:
@@ -369,7 +387,11 @@ class Ledger:
 
             body = {k: v for k, v in record.items() if k not in {"record_hash", "writer_mac"}}
             claimed_digest = record["record_hash"]
-            if not hmac.compare_digest(record_digest(body), claimed_digest):
+            try:
+                computed_digest = record_digest(body)
+            except (TypeError, ValueError) as exc:
+                return False, f"format error at {label}: canonical record invalid: {exc}"
+            if not hmac.compare_digest(computed_digest, claimed_digest):
                 return False, f"tamper detected at {label}: record_hash mismatch"
 
             record_key_id = record["writer_key_id"]
@@ -380,9 +402,9 @@ class Ledger:
                 if require_auth:
                     return False, f"authentication missing at {label}"
             else:
-                if not isinstance(record_key_id, str) or not re.fullmatch(r"[0-9a-f]{16}", record_key_id):
+                if not _is_hex(record_key_id, _HEX_16):
                     return False, f"format error at {label}: invalid writer_key_id"
-                if not _HEX_64.fullmatch(str(record_mac)):
+                if not _is_hex(record_mac, _HEX_64):
                     return False, f"format error at {label}: invalid writer_mac"
                 if self.writer_key is None:
                     if require_auth:
@@ -394,6 +416,12 @@ class Ledger:
                     if not hmac.compare_digest(record_mac, _mac(claimed_digest, self.writer_key)):
                         return False, f"authentication failed at {label}: writer_mac mismatch"
                     authenticated += 1
+
+            if not writer_mode_set:
+                expected_writer_key_id = record_key_id
+                writer_mode_set = True
+            elif record_key_id != expected_writer_key_id:
+                return False, f"authentication mode changed at {label}"
 
             previous = claimed_digest
 
@@ -427,6 +455,15 @@ class Ledger:
         if not ok:
             raise LedgerIntegrityError(f"refusing checkpoint: {message}")
 
+        if records:
+            existing_key_id = records[0]["writer_key_id"]
+            supplied_key_id = key_id(self.writer_key) if self.writer_key else None
+            if supplied_key_id != existing_key_id:
+                raise LedgerIntegrityError(
+                    "refusing checkpoint: authentication mode or writer key differs "
+                    "from the existing ledger"
+                )
+
         leaves = [record["record_hash"] for record in records]
         body: dict[str, Any] = {
             "schema": CHECKPOINT_SCHEMA,
@@ -456,6 +493,8 @@ class Ledger:
 
         if not isinstance(receipt, dict):
             return False, "checkpoint must be a JSON object"
+        if any(not isinstance(field, str) for field in receipt):
+            return False, "checkpoint field names must be strings"
         required = {
             "schema",
             "created_at",
@@ -475,7 +514,7 @@ class Ledger:
         if unknown:
             return False, f"checkpoint has unknown fields: {', '.join(unknown)}"
         receipt_hash = receipt.get("receipt_hash")
-        if not _HEX_64.fullmatch(str(receipt_hash)):
+        if not _is_hex(receipt_hash, _HEX_64):
             return False, "checkpoint has an invalid receipt_hash"
         body = {k: v for k, v in receipt.items() if k not in {"receipt_hash", "receipt_mac"}}
         if body.get("schema") != CHECKPOINT_SCHEMA:
@@ -486,33 +525,44 @@ class Ledger:
             return False, "checkpoint has an invalid created_at timestamp"
         if type(body.get("record_count")) is not int or body["record_count"] < 0:
             return False, "checkpoint has an invalid record_count"
-        if not _HEX_64.fullmatch(str(body.get("chain_head"))):
+        if not _is_hex(body.get("chain_head"), _HEX_64):
             return False, "checkpoint has an invalid chain_head"
-        if not _HEX_64.fullmatch(str(body.get("merkle_root"))):
+        if not _is_hex(body.get("merkle_root"), _HEX_64):
             return False, "checkpoint has an invalid merkle_root"
         if body.get("ledger_id") is not None:
+            if not isinstance(body["ledger_id"], str):
+                return False, "checkpoint has an invalid ledger_id"
             try:
-                uuid.UUID(str(body["ledger_id"]))
+                uuid.UUID(body["ledger_id"])
             except ValueError:
                 return False, "checkpoint has an invalid ledger_id"
-        if not hmac.compare_digest(_checkpoint_digest(body), receipt_hash):
+        try:
+            computed_receipt_hash = _checkpoint_digest(body)
+        except (TypeError, ValueError) as exc:
+            return False, f"checkpoint canonical form is invalid: {exc}"
+        if not hmac.compare_digest(computed_receipt_hash, receipt_hash):
             return False, "checkpoint receipt_hash mismatch"
 
         receipt_key_id = body.get("writer_key_id")
         receipt_mac = receipt.get("receipt_mac")
         if receipt_key_id is not None:
+            if not _is_hex(receipt_key_id, _HEX_16):
+                return False, "checkpoint has an invalid writer_key_id"
+            if not _is_hex(receipt_mac, _HEX_64):
+                return False, "checkpoint has an invalid receipt_mac"
             if self.writer_key is None:
                 if require_auth:
                     return False, "checkpoint authentication key required"
             else:
-                if not hmac.compare_digest(str(receipt_key_id), key_id(self.writer_key)):
+                if not hmac.compare_digest(receipt_key_id, key_id(self.writer_key)):
                     return False, "checkpoint authentication failed: wrong writer key"
-                if not _HEX_64.fullmatch(str(receipt_mac)) or not hmac.compare_digest(
-                    receipt_mac, _mac(receipt_hash, self.writer_key)
-                ):
+                if not hmac.compare_digest(receipt_mac, _mac(receipt_hash, self.writer_key)):
                     return False, "checkpoint authentication failed: receipt_mac mismatch"
-        elif require_auth:
-            return False, "checkpoint is unauthenticated"
+        else:
+            if receipt_mac is not None:
+                return False, "checkpoint has a receipt_mac without writer_key_id"
+            if require_auth:
+                return False, "checkpoint is unauthenticated"
 
         try:
             records = self._read_all_unlocked()
@@ -529,6 +579,8 @@ class Ledger:
             "chain_head": leaves[-1] if leaves else GENESIS,
             "merkle_root": merkle_root(leaves),
         }
+        if records:
+            expected["writer_key_id"] = records[0]["writer_key_id"]
         for field, value in expected.items():
             if body.get(field) != value:
                 return False, f"checkpoint mismatch: {field} differs from retained receipt"

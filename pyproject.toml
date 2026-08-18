@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "provenance-layer-poc"
-version = "0.3.0"
+version = "0.3.1"
 description = "Reference implementation for hash-chained AI decision receipts and Merkle checkpoints"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,3 +34,12 @@ provenance-demo = "demo:main"
 
 [tool.setuptools]
 py-modules = ["ledger", "merkle", "demo"]
+
+[tool.setuptools.data-files]
+"share/doc/provenance-layer-poc" = [
+  "CHANGELOG.md",
+  "PROTOCOL.md",
+  "SECURITY.md",
+  "THREAT_MODEL.md",
+]
+"share/provenance-layer-poc/tests" = ["test_ledger.py"]

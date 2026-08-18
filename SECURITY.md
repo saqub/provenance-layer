@@ -8,9 +8,11 @@ regulated, safety-critical, personal-data, or custody use.
 
 ## Reporting a vulnerability
 
-Please use GitHub's **Security > Report a vulnerability** flow for this
-repository. Do not publish an exploit, key, personal data, or sensitive system
-detail in a public issue.
+Use GitHub's **Security > Report a vulnerability** flow, which is enabled for
+this repository. Alternatively, send a minimal confidential summary to
+[admin@x7system.com](mailto:admin@x7system.com) and request a secure exchange.
+Do not email an exploit, key, personal data, credentials, or sensitive system
+detail, and do not publish them in a public issue.
 
 Include:
 

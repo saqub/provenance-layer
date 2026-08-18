@@ -45,6 +45,8 @@ def merkle_root(leaves: list[str]) -> str:
 def inclusion_proof(leaves: list[str], index: int) -> dict[str, Any]:
     """Return an index- and tree-size-aware proof for leaves[index]."""
 
+    if type(index) is not int:
+        raise TypeError("leaf index must be an integer")
     if not 0 <= index < len(leaves):
         raise IndexError("leaf index out of range")
     for leaf_index, leaf in enumerate(leaves):
@@ -89,7 +91,7 @@ def verify_inclusion(leaf: str, proof: dict[str, Any], root: str) -> bool:
         index = proof.get("leaf_index")
         tree_size = proof.get("tree_size")
         path = proof.get("path")
-        if not isinstance(index, int) or not isinstance(tree_size, int):
+        if type(index) is not int or type(tree_size) is not int:
             return False
         if tree_size < 1 or not 0 <= index < tree_size or not isinstance(path, list):
             return False
