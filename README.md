@@ -1,51 +1,151 @@
 # provenance-layer
 
-**A tamper-evident, blockchain-anchorable ledger for AI decisions — in 300 lines of standard-library Python.**
+**A reference implementation for hash-chained AI decision receipts, authenticated checkpoints, and selective inclusion proofs.**
 
-Generative AI has collapsed the cost of fabrication — of content, of records, of provenance itself. The counter-asset is *proof*. This repository is a working proof-of-concept of the smallest useful unit of verifiable AI: every material decision an AI system takes (a grade, a triage, an approval) is sealed into an append-only, hash-chained ledger; the whole history is committed to a single digest that can be anchored to **any** public chain or transparency log; and any single decision can be proven present **without revealing any other decision**.
+This repository is deliberately small enough to audit in one sitting. It
+models an AI-assisted decision in which a model proposes, an accountable human
+decides, and the system records a commitment to the decision payload.
 
-> The gate produces the record. The chain makes the record permanent.
+> **Boundary:** this is a non-production proof of concept. It does not make a
+> local file immutable, submit anything to a blockchain, authenticate the human
+> named in an `actor` string, establish trusted time, or prove that a decision
+> was correct. Modification or truncation becomes reliably detectable only
+> when the verifier has the writer key or a checkpoint retained outside the
+> attacker's control.
 
-## Why this matters now
+## Run it in 90 seconds
 
-- **Regulation has arrived.** EU AI Act **Article 12** — tamper-evident event logging across the lifetime of high-risk AI systems — has been in force since 2 August 2026.
-- **The category is proven.** Hardware-attested AI audit (EQTY Lab / Intel / NVIDIA), blockchain-anchored model governance (IBM / Casper Labs), and a decade of national-scale ledger-anchored health-record auditing in Estonia (Guardtime KSI) all demonstrate the pattern.
-- **The sovereignty property.** The ledger never leaves home. Only a checkpoint digest travels — publishable on a national chain, a consortium chain, or a newspaper's front page. Proof without data exfiltration, which is the property that matters to any government client.
+Python 3.10+ is the only requirement.
 
-## 60-second demo
-
-```
+```bash
+git clone https://github.com/saqub/provenance-layer.git
+cd provenance-layer
 python demo.py
+python -W error -m unittest -v
 ```
 
-Runs a clinical-style AI-assisted screening scenario (AI proposes a grade; an accountable human approves, overrides or escalates; the *decision of record* is sealed), then:
+The demo shows six things:
 
-1. **Verifies** the full chain — every record re-hashed, every link checked.
-2. **Attempts a tamper** — a past human override is quietly flipped back to "approved". Verification fails at exactly that record: `tamper detected at seq 4`.
-3. **Checkpoints** — one compact anchor receipt (Merkle root + chain head) commits to the entire history.
-4. **Proves inclusion** — decision №6 is shown to be inside the anchored set with a 3-hash proof, disclosing nothing else.
+1. a strict, versioned JSONL ledger with salted payload commitments;
+2. a naive historical edit being detected by the hash chain;
+3. a stronger attacker recomputing the whole public chain;
+4. HMAC-authenticated records detecting that stronger rewrite;
+5. a retained checkpoint detecting otherwise invisible tail truncation; and
+6. an index- and tree-size-aware Merkle inclusion proof.
 
-```
-python test_ledger.py   # 10 tests, stdlib unittest
-```
+The test suite contains 33 unit and adversarial tests and uses only the Python
+standard library.
 
-## What it is / what it is not
+## The three distinctions that matter
 
-| It is | It is not |
+| Term | What this PoC means |
 |---|---|
-| A working demonstration of tamper-evident AI decision logging with chain-agnostic anchoring | A product, a custody system, or a token |
-| Standard-library Python, zero dependencies, runs **air-gapped** | Tied to any chain, cloud, or vendor |
-| The pattern behind a human-gated AI operations estate (the gate emits the event; the ledger seals it) | A claim that scale problems (throughput, key management, HSMs, TEE attestation) are solved here |
+| **Tamper-evident, not immutable** | A self-consistent hash chain can be rewritten by someone who controls the file. A writer HMAC or independently retained checkpoint makes that rewrite detectable. |
+| **Anchoring-ready, not anchored** | The code emits a canonical checkpoint receipt with `anchor_status: UNPUBLISHED`. Publishing its digest to a transparency log, consortium system, or public chain is a separate integration. |
+| **Integrity, not truth** | A commitment can prove that bytes have not changed relative to a trusted witness. It cannot prove that an event was accurate, authorised, fair, or lawful. |
 
-## Design notes
+## What is implemented
 
-- **Records** bind `payload_hash` + `prev_hash` + their own canonical hash. Storage is human-readable JSONL — auditable with `grep`, no tooling required.
-- **Payload privacy by construction**: the ledger can store only the *hash* of a decision payload; the payload itself may live in a governed store, or nowhere.
-- **Anchoring is a policy choice, not an architecture choice**: the checkpoint receipt is a plain JSON digest. Anchor hourly to a consortium chain, daily to a public one, or continuously to a transparency log — the ledger code does not change.
-- **Extension path**: TEE-attested writers (the EQTY pattern), C2PA-style content credentials for model outputs, X-Road-style cross-agency verification (the Estonia pattern).
+- strict `provenance-layer/record/v2` schema, sequential numbering, one
+  `ledger_id`, UTC timestamps, and previous-record links;
+- deterministic JSON profile that rejects floats, non-string keys, NaN,
+  infinity, duplicate keys on read, and non-NFC strings;
+- per-record 128-bit public salts for payload commitments;
+- domain-separated SHA-256 record, Merkle-node, and receipt digests;
+- optional HMAC-SHA256 writer authentication with non-secret key identifiers;
+- cooperative cross-process file locking, append mode, flush, and `fsync`;
+- fail-closed append and checkpoint creation when the current ledger is invalid;
+- canonical checkpoint receipts that bind ledger identity, record count, chain
+  head, Merkle root, and explicit publication state;
+- checkpoint verification against a separately retained receipt; and
+- inclusion proofs that validate leaf index, tree size, sibling direction, and
+  path shape.
 
-## Provenance of this idea
+## What is intentionally not solved
 
-Built by [Saqub Hussain](https://github.com/saqub) — X7 Systems Ltd (UK) — extending the append-only audit patterns of X7's operating AI estate (human-gated agent pipelines, evidence-review systems with atomic audit trails, grounded advisors where numbers come from the database, not the model). GISEC Dubai 2022 speaker, *"Training for the Future: Crypto Cyber Security."*
+- an external timestamp, transparency-log submission, or blockchain adapter;
+- asymmetric signatures, individual actor identity, non-repudiation, PKI,
+  HSM/KMS custody, or key rotation;
+- a trusted clock or independently attested execution environment;
+- malicious processes that bypass the cooperative lock;
+- multi-writer ordering, crash recovery beyond one flushed append, high
+  throughput, pruning, replication, or distributed consensus;
+- confidentiality: actor, event type, time, and volume remain visible, and even
+  salted commitments can leak information when the payload space is tiny;
+- proof that an AI output or human decision was substantively correct; or
+- compliance with any law, standard, procurement framework, or assurance
+  programme.
 
-*This is a proof of concept written to be read in one sitting. The interesting conversation is what it becomes at national scale.*
+Read [THREAT_MODEL.md](THREAT_MODEL.md) before adapting the code, and
+[PROTOCOL.md](PROTOCOL.md) before implementing a compatible verifier.
+
+## Minimal library example
+
+```python
+import os
+from ledger import Ledger
+
+writer_key = bytes.fromhex(os.environ["PROVENANCE_WRITER_KEY"])
+ledger = Ledger("decisions.jsonl", writer_key=writer_key)
+
+record = ledger.append(
+    actor="reviewer-7",
+    event="human-approved",
+    payload={
+        "case": "synthetic-001",
+        "model": "example-model-v1",
+        "policy": "approval-policy-v3",
+        "decision": "REFER",
+    },
+)
+
+ok, detail = ledger.verify(require_auth=True)
+receipt = ledger.checkpoint(require_auth=True)
+```
+
+Generate a local test key without putting it in source control:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+HMAC proves that the same shared secret authenticated the record. It is not an
+individual digital signature and does not provide non-repudiation.
+
+## Why logging and assurance are relevant
+
+- [Article 12 of the EU AI Act](https://eur-lex.europa.eu/eli/reg/2024/1689/oj?locale=en)
+  requires automatic event logging and traceability for high-risk AI systems;
+  it does **not** prescribe blockchain or use the phrase "tamper-evident".
+- Under the EU's amended 2026 timeline, [Annex III high-risk rules apply from
+  2 December 2027 and product-integrated high-risk rules from 2 August
+  2028](https://digital-strategy.ec.europa.eu/en/policies/enforcement-ai-act).
+- G42's February 2026 [Assurance Compute
+  Framework](https://www.g42.ai/resources/news/g42-announces-assurance-compute-framework-secure-advanced-us-ai-infrastructure-across-pax-silica-ecosystem)
+  says it intends to use cryptographic mechanisms for compute-utilisation and
+  token-level verification. This independent PoC operates at the application
+  decision/action layer; it is not a substitute for that compute-layer design.
+
+This repository is independent and is not affiliated with, commissioned by,
+or endorsed by G42, the European Union, or any organisation cited above.
+
+## Files
+
+```text
+ledger.py          strict records, HMAC authentication, checkpoints
+merkle.py          Merkle roots and index/size-aware inclusion proofs
+demo.py            synthetic decision workflow and attack demonstrations
+test_ledger.py     33 unit and adversarial tests
+PROTOCOL.md        record, receipt, and proof formats
+THREAT_MODEL.md    claims, attacker model, and explicit exclusions
+SECURITY.md        vulnerability reporting and support boundary
+```
+
+## Licence
+
+Apache License 2.0. See [LICENSE](LICENSE).
+
+Built by [Saqub Hussain](https://github.com/saqub), founder of X7 Systems Ltd
+(UK company 16884921). The code is a conversation starter: the valuable next
+step is testing the pattern against one bounded, non-sensitive workflow with an
+agreed threat model.

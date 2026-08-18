@@ -1,3 +1,11 @@
 __pycache__/
 *.pyc
 demo-ledger.jsonl
+demo-ledger.jsonl.lock
+demo-checkpoint.json
+*.lock
+build/
+dist/
+*.egg-info/
+.venv/
+.coverage
